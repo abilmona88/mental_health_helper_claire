@@ -1,0 +1,6 @@
+echo ".venv/
+.idea/
+__pycache__/
+.streamlit/secrets.toml
+claire_app.db
+" >> .gitignore
