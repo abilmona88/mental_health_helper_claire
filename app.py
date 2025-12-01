@@ -4,7 +4,7 @@ from typing import List, Optional
 import streamlit as st
 from sqlalchemy.orm import Session
 
-from auth import get_user_by_email, verify_password, create_user
+from auth import get_user_by_email, verify_password, create_user, hash_password
 from claire_ai import generate_claire_reply
 from db import SessionLocal, init_db, User, Conversation, Message
 
@@ -151,7 +151,9 @@ def seed_two_users_from_secrets() -> None:
       CLAIRE_USER2_PASSWORD
       CLAIRE_USER2_FULLNAME  (optional)
 
-    Usernames are stored in User.email; passwords are hashed by create_user().
+    Usernames are stored in User.email; passwords are hashed by hash_password().
+    If a user already exists, their full_name and password_hash are updated
+    to match the current secrets.
     """
     db = get_db()
     try:
@@ -179,13 +181,23 @@ def seed_two_users_from_secrets() -> None:
                     profile_notes="",
                 )
             else:
-                # optional: you could update full_name here if you want
+                updated = False
                 if existing.full_name != fullname:
                     existing.full_name = fullname
+                    updated = True
+
+                # ALWAYS sync the password hash with current secrets
+                new_hash = hash_password(password)
+                if existing.password_hash != new_hash:
+                    existing.password_hash = new_hash
+                    updated = True
+
+                if updated:
                     db.add(existing)
                     db.commit()
     finally:
         db.close()
+
 
 
 # ---------- quick actions ----------
