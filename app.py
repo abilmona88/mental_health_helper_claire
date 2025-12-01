@@ -1,3 +1,4 @@
+import os
 from typing import List, Optional
 
 import streamlit as st
@@ -13,25 +14,28 @@ st.set_page_config(
     layout="wide",
 )
 
-# ---------- DISCLAIMER TEXT (unchanged, keep whatever you already like) ----------
+# ---------- DISCLAIMER TEXT (short version – keep or swap with your heavy one) ----------
 
 SIGNUP_DISCLAIMER = """
-**IMPORTANT LEGAL NOTICE – TERMS OF USE, RISK ACKNOWLEDGEMENT, AND LIMITATION OF LIABILITY**
+**IMPORTANT LEGAL NOTICE – READ BEFORE LOGGING IN**
 
-This app is for general informational and emotional support only. It does NOT provide
-medical, mental-health, psychological, or emergency services. Do not use it for crises
-or emergencies. If you are in crisis, contact your local emergency number or a crisis
-hotline immediately.
+This app and the AI assistant “Claire” provide general informational and emotional support only.
+They do **not** provide medical, mental-health, psychological, or emergency services and are
+not a substitute for professional care.
 
-By logging in and using this app, you accept that you are solely responsible for how you
-use any information or responses provided, and you agree that the creators/operators of
-this app are not liable for any loss, injury, or damage arising from your use or reliance
-on the app, to the maximum extent permitted by applicable law.
+Do **not** use this app for crises or emergencies. If you are in crisis, think you might hurt
+yourself or someone else, or believe someone is in danger, contact your local emergency number
+(e.g. 911) or a crisis hotline immediately.
+
+By logging in and using this app, you accept that you are solely responsible for how you use any
+information or responses provided, and you agree that the creators/operators of this app are not
+liable for any loss, injury, or damage arising from your use or reliance on the app, to the
+maximum extent permitted by applicable law.
 """
 
 CHAT_REMINDER = (
     "⚠️ **Reminder:** Claire is an AI program for general information and emotional support only. "
-    "She is **not** a doctor, therapist, or crisis service. Nothing in this chat is medical or "
+    "She is **not** a doctor, therapist, or crisis service, and nothing in this chat is medical or "
     "mental-health advice, diagnosis, or treatment. Do **not** use this app for emergencies. If you "
     "are in crisis or think you might hurt yourself or someone else, contact your local emergency "
     "number or a crisis hotline immediately."
@@ -109,39 +113,77 @@ def get_conversation_history(
     return msgs
 
 
-# ---------- SEED THE TWO USERS ----------
+# ---------- helpers for secrets / env ----------
 
-def seed_two_users() -> None:
+def _get_secret(key: str) -> Optional[str]:
     """
-    Ensure exactly two users exist in the DB for login:
-      - username: rashad, password: admin1
-      - username: alex,   password: admin2
+    Try st.secrets first, then environment variables.
+    Never crashes if secrets are missing.
+    """
+    value = None
+    try:
+        if key in st.secrets:
+            value = st.secrets[key]
+    except Exception:
+        # st.secrets may not exist in some environments
+        value = None
 
-    We use the User.email field as the 'username' for simplicity.
+    if not value:
+        value = os.environ.get(key)
+
+    if value is not None:
+        value = str(value).strip()
+
+    return value or None
+
+
+# ---------- SEED EXACTLY TWO USERS FROM SECRETS (NO HARD-CODED CREDS) ----------
+
+def seed_two_users_from_secrets() -> None:
+    """
+    Ensure at most two users exist, defined by secrets/env:
+
+      CLAIRE_USER1_USERNAME
+      CLAIRE_USER1_PASSWORD
+      CLAIRE_USER1_FULLNAME  (optional)
+
+      CLAIRE_USER2_USERNAME
+      CLAIRE_USER2_PASSWORD
+      CLAIRE_USER2_FULLNAME  (optional)
+
+    Usernames are stored in User.email; passwords are hashed by create_user().
     """
     db = get_db()
     try:
-        # Rashad
-        rashad = get_user_by_email(db, "rashad")
-        if rashad is None:
-            rashad = create_user(
-                db,
-                email="rashad",
-                full_name="Rashad",
-                password="admin1",
-                profile_notes="",
-            )
+        for idx in (1, 2):
+            u_key = f"CLAIRE_USER{idx}_USERNAME"
+            p_key = f"CLAIRE_USER{idx}_PASSWORD"
+            n_key = f"CLAIRE_USER{idx}_FULLNAME"
 
-        # Alex
-        alex = get_user_by_email(db, "alex")
-        if alex is None:
-            alex = create_user(
-                db,
-                email="alex",
-                full_name="Alex",
-                password="admin2",
-                profile_notes="",
-            )
+            username = _get_secret(u_key)
+            password = _get_secret(p_key)
+            fullname = _get_secret(n_key) or (username or f"User{idx}")
+
+            # If username or password isn't set, skip this slot
+            if not username or not password:
+                continue
+
+            existing = get_user_by_email(db, username)
+            if existing is None:
+                # create new user
+                create_user(
+                    db,
+                    email=username,
+                    full_name=fullname,
+                    password=password,
+                    profile_notes="",
+                )
+            else:
+                # optional: you could update full_name here if you want
+                if existing.full_name != fullname:
+                    existing.full_name = fullname
+                    db.add(existing)
+                    db.commit()
     finally:
         db.close()
 
@@ -190,12 +232,10 @@ def show_auth_page() -> None:
     with st.expander("Read this before logging in", expanded=False):
         st.markdown(SIGNUP_DISCLAIMER)
 
-    st.write(
-        "This app is restricted to authorized users only."
-    )
+    st.write("This app is restricted to authorized users only.")
 
     with st.form("login_form"):
-        username = st.text_input("Username (rashad or alex)")
+        username = st.text_input("Username")
         password = st.text_input("Password", type="password")
         agree = st.checkbox(
             "I have read and agree to the legal notice above.",
@@ -213,7 +253,7 @@ def show_auth_page() -> None:
 
         db = get_db()
         try:
-            # We use email column as 'username'
+            # We use the email column as 'username'
             user = get_user_by_email(db, username)
             if not user or not verify_password(password, user.password_hash):
                 st.error("Invalid username or password.")
@@ -239,7 +279,6 @@ def show_main_app(user: User) -> None:
             st.subheader("Account")
             st.write(f"**User:** {user.full_name} (username: {user.email})")
 
-            # Profile notes still optional if you want internal personalized context
             profile_notes = st.text_area(
                 "Profile notes (Claire uses this as context)",
                 value=user.profile_notes or "",
@@ -345,7 +384,7 @@ def show_main_app(user: User) -> None:
 
 def main() -> None:
     init_db()
-    seed_two_users()  # <-- make sure Rashad and Alex exist
+    seed_two_users_from_secrets()  # <-- creates/updates your two users from secrets/env
 
     db = get_db()
     try:
